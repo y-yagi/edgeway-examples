@@ -1,0 +1,6 @@
+source "https://rubygems.org"
+
+# The example runs against a sibling edgeway checkout (../../edgeway), not a released gem.
+# Set EDGEWAY_PATH to use another checkout.
+gem "edgeway", path: ENV.fetch("EDGEWAY_PATH", "../../edgeway")
+gem "spinel_test-unit", group: :test
