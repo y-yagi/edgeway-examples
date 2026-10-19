@@ -42,7 +42,7 @@ expect "health is ok" '.status == "ok"'
 req 201 -X POST -H "$J" -d '{"todo":{"title":"check a"}}' "$U/todos"
 expect "a new todo is not done" '.title == "check a" and .done == false'
 expect "a new todo has the default priority" '.priority == "normal"'
-expect "created_at is an ISO 8601 time" '.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")'
+expect "created_at is an ISO 8601 time" '.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$")'
 expect "updated_at starts as created_at" '.updated_at == .created_at'
 a=$(jq -r .id "$body")
 created=$(jq -r .created_at "$body")
