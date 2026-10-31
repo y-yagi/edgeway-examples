@@ -1,10 +1,12 @@
 development:
   adapter: d1
   binding: DB
+  sessions: true
 
 production:
   adapter: d1
   binding: DB
+  sessions: true
 
 test:
   adapter: memory

@@ -24,6 +24,40 @@ class TodosTest < Edgeway::IntegrationTest
     assert_equal ["open", "closed"], json.map { |t| t["title"] }
   end
 
+  def test_index_filters_by_ids
+    first = Todo.create!(title: "a")
+    Todo.create!(title: "b")
+    third = Todo.create!(title: "c")
+    get "/todos?ids=#{first.id},#{third.id}"
+    assert_equal ["a", "c"], json.map { |t| t["title"] }
+    get "/todos?ids="
+    assert_equal [], json
+  end
+
+  def test_index_filters_by_title_text
+    Todo.create!(title: "buy milk")
+    Todo.create!(title: "walk")
+    get "/todos?q=mil"
+    assert_equal ["buy milk"], json.map { |t| t["title"] }
+  end
+
+  def test_index_filters_by_created_range
+    todo = Todo.create!(title: "a")
+    get "/todos?created_from=#{todo.created_at}"
+    assert_equal 1, json.size
+    get "/todos?created_to=2000-01-01"
+    assert_equal 0, json.size
+  end
+
+  def test_stats_counts_done_and_open
+    Todo.create!(title: "a", done: true)
+    Todo.create!(title: "b")
+    Todo.create!(title: "c")
+    get "/todos/stats"
+    assert_response 200
+    assert_equal({ "done" => 1, "open" => 2 }, json)
+  end
+
   def test_create_persists_the_row
     post "/todos", json: { "todo" => { "title" => "a" } }
     assert_response 201

@@ -1,4 +1,5 @@
 Edgeway.application.routes.draw do |r|
+  r.get "/todos/stats", to: "todos#stats"
   r.resources :todos, only: [:index, :show, :create, :update, :destroy] do |t|
     t.resources :comments, only: [:index, :create, :destroy]   # /todos/:todo_id/comments
   end
