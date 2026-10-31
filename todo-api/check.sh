@@ -154,6 +154,45 @@ req 200 -H 'X_Foo: 1' "$U/health"
 for id in $a $b $c; do req 204 -X DELETE "$U/todos/$id"; done
 req 404 "$U/todos/$a"
 
+# Query forms: ids= is IN, q= is LIKE, created_from/created_to a String Range;
+# /todos/stats is raw SQL. Three todos, a second apart, are told apart by id.
+req 200 "$U/todos/stats"
+done_before=$(jq -r .done "$body")
+open_before=$(jq -r .open "$body")
+marker="range-$(date +%s)"
+sleep 1
+req 201 -X POST -H "$J" -d "{\"todo\":{\"title\":\"$marker one\",\"done\":true}}" "$U/todos"
+r1=$(jq -r .id "$body")
+sleep 1
+req 201 -X POST -H "$J" -d "{\"todo\":{\"title\":\"$marker two\"}}" "$U/todos"
+r2=$(jq -r .id "$body")
+created2=$(jq -r .created_at "$body")
+sleep 1
+req 201 -X POST -H "$J" -d "{\"todo\":{\"title\":\"$marker three\"}}" "$U/todos"
+r3=$(jq -r .id "$body")
+ids="$r1,$r2,$r3"
+req 200 "$U/todos/stats"
+expect "stats counts the new todos" ". == {\"done\": $((done_before + 1)), \"open\": $((open_before + 2))}"
+req 200 "$U/todos?ids=$r1,$r3"
+expect "?ids= is IN" "[.[].id] == [$r1, $r3]"
+req 200 "$U/todos?ids="
+expect "?ids= with no id matches nothing" '. == []'
+req 200 "$U/todos?q=$marker"
+expect "?q= matches the title" "[.[].id] == [$r1, $r2, $r3]"
+req 200 "$U/todos?q=$marker%20two"
+expect "?q= can match one title" "[.[].id] == [$r2]"
+req 200 "$U/todos?q=100%25_'"
+expect "?q= is a bind: %, _ and a quote match nothing here" '. == []'
+req 200 "$U/todos?ids=$ids&created_from=$created2"
+expect "created_from is endless" "[.[].id] == [$r2, $r3]"
+req 200 "$U/todos?ids=$ids&created_to=$created2"
+expect "created_to is beginless" "[.[].id] == [$r1, $r2]"
+req 200 "$U/todos?ids=$ids&created_from=$created2&created_to=$created2"
+expect "both make a closed range" "[.[].id] == [$r2]"
+req 200 "$U/todos?ids=$ids&q=$marker&done=true"
+expect "the forms chain" "[.[].id] == [$r1]"
+for id in $r1 $r2 $r3; do req 204 -X DELETE "$U/todos/$id"; done
+
 # JWT authentication: GET /me needs a Bearer token (HS256, the secret in
 # .dev.vars; iss and aud as wrangler.toml says).
 b64u() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
@@ -239,17 +278,31 @@ site=http://localhost:3000
 req 204 -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos"
 same "preflight: Allow-Origin" "$site" "$(header_of access-control-allow-origin -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos")"
 same "preflight: Allow-Methods" "GET, HEAD, POST, PUT, PATCH, DELETE" "$(header_of access-control-allow-methods -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos")"
-same "preflight: Allow-Headers" "Authorization, Content-Type" "$(header_of access-control-allow-headers -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos")"
+same "preflight: Allow-Headers" "Authorization, Content-Type, X-D1-Bookmark" "$(header_of access-control-allow-headers -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos")"
 same "preflight: Max-Age" "600" "$(header_of access-control-max-age -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos")"
+same "a CORS response exposes X-D1-Bookmark" "X-D1-Bookmark" "$(header_of access-control-expose-headers -H "Origin: $site" "$U/todos")"
 req 403 -X OPTIONS -H 'Origin: https://evil.example' -H 'Access-Control-Request-Method: GET' "$U/todos"
 expect "a refused preflight says so" '. == {"error": "origin not allowed"}'
 same "a refused preflight has no Allow-Origin" "" "$(header_of access-control-allow-origin -X OPTIONS -H 'Origin: https://evil.example' -H 'Access-Control-Request-Method: GET' "$U/todos")"
 req 200 -H "Origin: $site" "$U/health"
 same "GET from the allowed origin: Allow-Origin" "$site" "$(header_of access-control-allow-origin -H "Origin: $site" "$U/health")"
-same "GET from the allowed origin: Vary" "Origin" "$(header_of vary -H "Origin: $site" "$U/health")"
+same "GET from the allowed origin: Vary" "X-D1-Bookmark, Origin" "$(header_of vary -H "Origin: $site" "$U/health")"
 req 200 -H 'Origin: https://evil.example' "$U/health"
 same "GET from another origin has no Allow-Origin" "" "$(header_of access-control-allow-origin -H 'Origin: https://evil.example' "$U/health")"
 same "an error response has Allow-Origin too" "$site" "$(header_of access-control-allow-origin -H "Origin: $site" "$U/boom")"
+
+# Sessions (sessions: true in config/database.yml): X-D1-Bookmark carries D1's
+# bookmark, lowercase hex and "-".
+bookmark_header='^DB=[0-9a-f-]+$'
+bookmark_of() { header_of x-d1-bookmark "$@"; }
+mark=$(bookmark_of "$U/todos")
+if echo "$mark" | grep -Eq "$bookmark_header"; then echo "ok  a response has X-D1-Bookmark ($mark)"; else echo "NG  X-D1-Bookmark is '$mark'"; fails=$((fails + 1)); fi
+if header_of vary "$U/todos" | grep -q 'X-D1-Bookmark'; then echo "ok  a response has Vary: X-D1-Bookmark"; else echo "NG  Vary has no X-D1-Bookmark"; fails=$((fails + 1)); fi
+req 200 -H "X-D1-Bookmark: $mark" "$U/todos"
+if bookmark_of -H "X-D1-Bookmark: $mark" "$U/todos" | grep -Eq "$bookmark_header"; then echo "ok  the bookmark sent back is answered with one"; else echo "NG  no bookmark after sending one back"; fails=$((fails + 1)); fi
+req 200 -H 'X-D1-Bookmark: DB=not a bookmark!' "$U/todos"
+junk=$(bookmark_of -H 'X-D1-Bookmark: DB=not a bookmark!' "$U/todos")
+if echo "$junk" | grep -Eq "$bookmark_header"; then echo "ok  an invalid bookmark is ignored, not echoed"; else echo "NG  after an invalid bookmark: '$junk'"; fails=$((fails + 1)); fi
 
 echo "$fails NG"
 exit "$fails"
