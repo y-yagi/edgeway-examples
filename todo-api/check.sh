@@ -36,8 +36,36 @@ expect() {
   fi
 }
 
+# header_of NAME [curl args...]: a response header's value, empty if absent.
+header_of() {
+  n=$1
+  shift
+  curl -s -o /dev/null -D - "$@" | tr -d '\r' | awk -F': ' -v n="$n" 'tolower($1) == tolower(n) { print $2 }'
+}
+# same DESCRIPTION WANT GOT: ok if equal.
+same() {
+  if [ "$2" = "$3" ]; then
+    echo "ok  $1"
+  else
+    echo "NG  $1: '$3' (want '$2')"
+    fails=$((fails + 1))
+  fi
+}
+
 req 200 "$U/health"
 expect "health is ok" '.status == "ok"'
+
+# public/robots.txt is a static asset, answered without the app. The CORS
+# header is one the app adds to every response for an allowed origin, so an
+# asset response lacks it. A method other than GET and HEAD is an empty 405.
+req 200 "$U/robots.txt"
+same "robots.txt is the file" "$(cat "$(dirname "$0")/public/robots.txt")" "$(cat "$body")"
+req 200 -H 'Origin: http://localhost:3000' "$U/robots.txt"
+same "robots.txt has no CORS header" "" "$(header_of access-control-allow-origin -H 'Origin: http://localhost:3000' "$U/robots.txt")"
+req 405 -X POST "$U/robots.txt"
+same "POST /robots.txt is empty" "" "$(cat "$body")"
+req 200 "$U/"
+expect "the app still answers /" '.status == "ok"'
 
 req 201 -X POST -H "$J" -d '{"todo":{"title":"check a"}}' "$U/todos"
 expect "a new todo is not done" '.title == "check a" and .done == false'
@@ -220,21 +248,6 @@ else
 fi
 
 # CORS: CORS_ORIGINS in wrangler.toml is http://localhost:3000.
-# header_of NAME [curl args...]: a response header's value, empty if absent.
-header_of() {
-  n=$1
-  shift
-  curl -s -o /dev/null -D - "$@" | tr -d '\r' | awk -F': ' -v n="$n" 'tolower($1) == tolower(n) { print $2 }'
-}
-# same DESCRIPTION WANT GOT: ok if equal.
-same() {
-  if [ "$2" = "$3" ]; then
-    echo "ok  $1"
-  else
-    echo "NG  $1: '$3' (want '$2')"
-    fails=$((fails + 1))
-  fi
-}
 site=http://localhost:3000
 req 204 -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos"
 same "preflight: Allow-Origin" "$site" "$(header_of access-control-allow-origin -X OPTIONS -H "Origin: $site" -H 'Access-Control-Request-Method: GET' "$U/todos")"

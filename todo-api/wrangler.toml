@@ -22,6 +22,12 @@ JWT_LEEWAY = "5"
 # CORS_EXPOSE_HEADERS (see the README).
 CORS_ORIGINS = "http://localhost:3000"
 
+# Files in public/ (robots.txt) are served as is, without starting the app, so
+# authentication, CORS and the app's headers do not apply to them. A file takes
+# its path from the app: POST /robots.txt is 405, not a 404 from the router.
+[assets]
+directory = "./public"
+
 # Simulated locally by `wrangler dev`. Create the tables with
 # `npx wrangler d1 migrations apply edgeway-todos --local`.
 [[d1_databases]]

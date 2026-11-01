@@ -2,7 +2,7 @@
 
 Example apps for [Edgeway](https://github.com/y-yagi/edgeway).
 
-- `todo-api/`: a JSON API on Cloudflare Workers + D1 (models, JWT auth, CORS). `todo-api/check.sh` checks a running instance.
+- `todo-api/`: a JSON API on Cloudflare Workers + D1 (models, JWT auth, CORS). A static file in `public/` (`robots.txt`) is served without the app. `todo-api/check.sh` checks a running instance.
 
 These examples run against a checkout of Edgeway, not a released gem. Clone it **next to** this repository:
 
