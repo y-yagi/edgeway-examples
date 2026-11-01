@@ -14,6 +14,7 @@ class TodosController < ApplicationController
 
   def create
     todo = Todo.create!(todo_params)
+    TodoWebhook.created(todo)
     render json: todo, status: :created
   end
 

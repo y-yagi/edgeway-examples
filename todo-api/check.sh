@@ -7,7 +7,37 @@ U=${1:-http://localhost:8787}
 J='Content-Type: application/json'
 fails=0
 body=$(mktemp)
-trap 'rm -f "$body"' EXIT
+received=$(mktemp)
+stub_pid=
+stop_stub() {
+  [ -n "$stub_pid" ] || return 0
+  kill "$stub_pid" 2>/dev/null
+  wait "$stub_pid" 2>/dev/null
+  stub_pid=
+}
+trap 'stop_stub; rm -f "$body" "$received"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The webhook receiver that APP_WEBHOOK_URL (wrangler.toml) points at, for an
+# app on this machine. stub_ready says whether it answers.
+hook=http://127.0.0.1:8788/webhook
+stub_ready=false
+start_stub() {
+  python3 "$(dirname "$0")/webhook-stub.py" 8788 "$received" &
+  stub_pid=$!
+  tries=0
+  while [ "$tries" -lt 50 ] && kill -0 "$stub_pid" 2>/dev/null; do
+    # The stub answers a GET with 501; another process holding the port would not.
+    if [ "$(curl -s -o /dev/null --max-time 1 -w '%{http_code}' "$hook")" = 501 ] && kill -0 "$stub_pid" 2>/dev/null; then
+      stub_ready=true
+      return
+    fi
+    tries=$((tries + 1))
+    sleep 0.1
+  done
+}
+received_count() { wc -l < "$received" | tr -d ' '; }
 
 # The JWT secret of the running app: $JWT_SECRET, or .dev.vars (what wrangler
 # dev uses). The tokens below are made here with openssl.
@@ -51,6 +81,10 @@ same() {
     fails=$((fails + 1))
   fi
 }
+
+case $U in
+  http://localhost:*|http://127.0.0.1:*) start_stub ;;
+esac
 
 req 200 "$U/health"
 expect "health is ok" '.status == "ok"'
@@ -246,6 +280,32 @@ else
   invalid "not-a-jwt" "not a JWT"
   req 200 "$U/health"
 fi
+
+# Webhook: POST /todos sends it before it answers; webhook-stub.py records the
+# bodies. A failing webhook is only logged, so creating a todo still answers
+# 201.
+case $U in
+  http://localhost:*|http://127.0.0.1:*)
+    if $stub_ready; then
+      before=$(received_count)
+      req 201 -X POST -H "$J" -d '{"todo":{"title":"check webhook"}}' "$U/todos"
+      webhook_todo_id=$(jq -r .id "$body")
+      same "the webhook was sent once" "$((before + 1))" "$(received_count)"
+      tail -n 1 "$received" > "$body"
+      expect "the webhook has the event and the created todo" ".event == \"todo.created\" and .todo.id == $webhook_todo_id and .todo.title == \"check webhook\""
+      stop_stub
+      req 201 -X POST -H "$J" -d '{"todo":{"title":"check webhook down"}}' "$U/todos"
+      stub_down_todo_id=$(jq -r .id "$body")
+      for id in $webhook_todo_id $stub_down_todo_id; do req 204 -X DELETE "$U/todos/$id"; done
+    else
+      echo "NG  webhook: the stub did not start (port 8788 busy?)"
+      fails=$((fails + 1))
+    fi
+    ;;
+  *)
+    echo "skip  webhook: needs the app and the stub on this machine"
+    ;;
+esac
 
 # CORS: CORS_ORIGINS in wrangler.toml is http://localhost:3000.
 site=http://localhost:3000

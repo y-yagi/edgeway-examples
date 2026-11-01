@@ -22,6 +22,11 @@ JWT_LEEWAY = "5"
 # CORS_EXPOSE_HEADERS (see the README).
 CORS_ORIGINS = "http://localhost:3000"
 
+# POST /todos tells this URL about each new todo (TodoWebhook); unset or empty
+# means no webhook. Locally it is the stub that check.sh starts (http is allowed
+# only for localhost, 127.0.0.1 and [::1]); a deploy uses an https URL.
+APP_WEBHOOK_URL = "http://127.0.0.1:8788/webhook"
+
 # Files in public/ (robots.txt) are served as is, without starting the app, so
 # authentication, CORS and the app's headers do not apply to them. A file takes
 # its path from the app: POST /robots.txt is 405, not a 404 from the router.
@@ -52,6 +57,7 @@ JWT_ISSUER = "https://idp.example/"
 JWT_AUDIENCE = "todo-api"
 JWT_LEEWAY = "5"
 CORS_ORIGINS = "http://localhost:3000"
+# A webhook URL that holds a secret: `npx wrangler secret put APP_WEBHOOK_URL --env prod`.
 
 [[env.prod.d1_databases]]
 binding = "DB"

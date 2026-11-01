@@ -1,9 +1,45 @@
 require "edgeway/test"
 require "test_helper"
 
+class WarningRecorder
+  attr_reader :warnings
+
+  def initialize
+    @warnings = []
+  end
+
+  def warn(message, fields = {})
+    @warnings << message
+  end
+
+  def info(message, fields = {}); end
+  def error(message, fields = {}); end
+  def debug(message, fields = {}); end
+end
+
 # Runs against a real in-memory SQLite database with db/migrations applied
 # (see Edgeway::UnitTest#setup); every test starts from empty tables.
 class TodosTest < Edgeway::IntegrationTest
+  WEBHOOK_URL = "http://127.0.0.1:8788/webhook"
+
+  # The native test build does not read wrangler.toml's variables, and ENV
+  # outlives a test, so every test starts without a webhook.
+  def setup
+    super
+    ENV["APP_WEBHOOK_URL"] = ""
+    @logger = Edgeway.logger
+    @warnings = WarningRecorder.new
+    Edgeway.logger = @warnings
+  end
+
+  def teardown
+    ENV["APP_WEBHOOK_URL"] = ""
+    Edgeway.logger = @logger
+    super
+  end
+
+  def enable_webhook = ENV["APP_WEBHOOK_URL"] = WEBHOOK_URL
+
   def test_index_lists_persisted_todos
     Todo.create!(title: "a")
     Todo.create!(title: "b", priority: "high")
@@ -34,6 +70,45 @@ class TodosTest < Edgeway::IntegrationTest
     assert_equal false, todo.done
     assert_equal 1, Todo.count
     assert_equal 1, db.select_all("SELECT COUNT(*) AS n FROM todos", [])[0]["n"]
+  end
+
+  def test_create_sends_the_webhook
+    enable_webhook
+    stub_http(:post, WEBHOOK_URL, status: 204)
+    post "/todos", json: { "todo" => { "title" => "a" } }
+    assert_response 201
+    assert_equal 1, http_requests.size
+    request = http_requests[0]
+    assert_equal WEBHOOK_URL, request["url"]
+    assert_equal "application/json", request["headers"]["Content-Type"]
+    assert_equal 3000, request["timeout_ms"]
+    assert_equal({ "event" => "todo.created", "todo" => json }, JSON.parse(request["body"]))
+  end
+
+  def test_create_survives_a_webhook_error
+    enable_webhook
+    stub_http_error(:post, WEBHOOK_URL, "timed out", timeout: true)
+    post "/todos", json: { "todo" => { "title" => "a" } }
+    assert_response 201
+    assert_equal 1, Todo.count
+    assert_equal 1, http_requests.size
+    assert_equal ["webhook failed"], @warnings.warnings
+  end
+
+  def test_create_survives_a_webhook_refusal
+    enable_webhook
+    stub_http(:post, WEBHOOK_URL, status: 500)
+    post "/todos", json: { "todo" => { "title" => "a" } }
+    assert_response 201
+    assert_equal 1, http_requests.size
+    assert_equal ["webhook refused"], @warnings.warnings
+  end
+
+  def test_create_without_a_webhook_url_sends_nothing
+    post "/todos", json: { "todo" => { "title" => "a" } }
+    assert_response 201
+    assert_equal [], http_requests
+    assert_equal [], @warnings.warnings
   end
 
   def test_show
